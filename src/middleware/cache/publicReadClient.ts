@@ -70,28 +70,51 @@ type MarkerItemsResult<T> = {
   items: T[][];
 };
 
-async function readItems<T>(requests: Array<() => Promise<Response>>): Promise<MarkerItemsResult<T> | Response> {
+async function readItems<T>(
+  requests: Array<() => Promise<Response>>,
+  kind: PublicReadMarkerKind,
+  selectItems: (items: T[]) => T[]
+): Promise<MarkerItemsResult<T> | Response> {
   let nextIndex = 0;
   const results: Array<PromiseSettledResult<{ items?: T[] }>> = new Array(requests.length);
   let failureStatus: number | undefined;
+  const failures: Array<{
+    stage: "fetch" | "body";
+    upstreamStatus?: number;
+    message: string;
+    elapsedMs: number;
+  }> = [];
   await Promise.all(Array.from({ length: Math.min(8, requests.length) }, async () => {
     while (nextIndex < requests.length) {
       const index = nextIndex++;
+      const startedAt = Date.now();
+      let stage: "fetch" | "body" = "fetch";
+      let upstreamStatus: number | undefined;
       try {
         const response = await requests[index]!();
+        upstreamStatus = response.status;
         if (!response.ok) {
           failureStatus ??= response.status;
           await response.body?.cancel().catch(() => undefined);
           throw new Error(`Public cache read failed: ${response.status}`);
         }
+        stage = "body";
         const payload = await response.json() as { items?: T[] };
         if (!Array.isArray(payload.items)) {
           throw new Error("Public cache response did not contain an items array.");
         }
-        results[index] = { status: "fulfilled", value: payload };
+        results[index] = { status: "fulfilled", value: { items: selectItems(payload.items) } };
       } catch (reason) {
         if (transientDependencyError(reason)) failureStatus = 503;
-        results[index] = { status: "rejected", reason };
+        if (failures.length < 3) {
+          failures.push({
+            stage,
+            upstreamStatus,
+            message: (reason instanceof Error ? reason.message : String(reason)).slice(0, 300),
+            elapsedMs: Date.now() - startedAt
+          });
+        }
+        results[index] = { status: "rejected", reason: undefined };
       }
     }
   }));
@@ -107,6 +130,14 @@ async function readItems<T>(requests: Array<() => Promise<Response>>): Promise<M
     items.push(result.value.items!);
   }
 
+  if (failedCount > 0) {
+    console.error(items.length > 0 ? "[public-read] partial marker response" : "[public-read] all marker reads failed", {
+      kind,
+      failedMarkerCount: failedCount,
+      totalMarkerCount: requests.length,
+      failures
+    });
+  }
   if (items.length === 0 && failedCount > 0) {
     return noStoreError(failureStatus ?? 502, "Public cache reads failed.");
   }
@@ -134,15 +165,6 @@ function combinedResponse(
   });
 }
 
-function logPartialRead(kind: PublicReadMarkerKind, failedCount: number, totalCount: number): void {
-  if (failedCount === 0) return;
-  console.error("[public-read] partial marker response", {
-    kind,
-    failedMarkerCount: failedCount,
-    totalMarkerCount: totalCount
-  });
-}
-
 export async function fetchPublicImagesFromWorkersCache(payload: {
   markerIds: string[];
   limit: number;
@@ -158,11 +180,10 @@ export async function fetchPublicImagesFromWorkersCache(payload: {
       cacheNamespace: payload.cacheNamespace,
       assetBaseUrl: payload.assetBaseUrl
     })
-  )));
+  )), "image", (images) => images.slice(0, payload.limit));
   if (markerItems instanceof Response) return markerItems;
 
-  logPartialRead("image", markerItems.failedCount, markerIds.length);
-  const items = markerItems.items.flatMap((images) => images.slice(0, payload.limit));
+  const items = markerItems.items.flat();
   return combinedResponse(
     items,
     items.length > 0 ? UGC_PUBLIC_LIST_CACHE_CONTROL : UGC_PUBLIC_EMPTY_LIST_CACHE_CONTROL,
@@ -186,16 +207,15 @@ export async function fetchPublicCommentsFromWorkersCache(payload: {
       replyLimit: PUBLIC_MARKER_COMMENT_REPLY_CACHE_LIMIT,
       cacheNamespace: payload.cacheNamespace
     })
-  )));
-  if (markerItems instanceof Response) return markerItems;
-
-  logPartialRead("comment", markerItems.failedCount, markerIds.length);
-  const items = markerItems.items.flatMap((comments) => comments
+  )), "comment", (comments) => comments
     .slice(0, payload.limit)
     .map((comment) => ({
       ...comment,
       replies: comment.replies.slice(0, payload.replyLimit)
     })));
+  if (markerItems instanceof Response) return markerItems;
+
+  const items = markerItems.items.flat();
   return combinedResponse(
     items,
     items.length > 0 ? "public, max-age=15" : "public, max-age=5",

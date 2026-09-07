@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteD1 } from "../test/sqliteD1";
-import { ensureUserProfile } from "./users";
+import { ensureUserProfile, getUserByPublicUid } from "./users";
 
 describe("profile activity write throttling", () => {
   let database: SqliteD1;
@@ -53,5 +53,17 @@ describe("profile activity write throttling", () => {
     const count = database.queries.length;
     await ensureUserProfile(database.db, { uid: "new-user", email: "new@example.test" });
     expect(database.queries).toHaveLength(count + 1);
+  });
+
+  it("resolves users by their public UID", async () => {
+    database.sqlite.exec("UPDATE users SET uid_number = 103427, uid_suffix = 'VA' WHERE uid = 'user-1'");
+
+    await expect(getUserByPublicUid(database.db, "103427va")).resolves.toMatchObject({
+      uid: "user-1",
+      email: "user@example.test",
+      uidNumber: 103427,
+      uidSuffix: "VA",
+    });
+    await expect(getUserByPublicUid(database.db, "not-a-public-uid")).resolves.toBeNull();
   });
 });

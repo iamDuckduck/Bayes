@@ -20,38 +20,6 @@ import { imagesQuerySchema } from "./schemas";
 import { resolveImageScope, resolvePrivateAssetBaseUrl, resolvePublicAssetBaseUrl } from "./scope";
 import { applyImageViewerReactions } from "./viewerOverlay";
 
-const imageLoadersByDb = new WeakMap<
-  D1Database,
-  Map<string, InFlightBatchLoader<PublicSubmissionImage[]>>
->();
-
-function getPublicImageLoader(payload: {
-  db: D1Database;
-  assetBaseUrl: string;
-  pathPrefix?: string;
-  excludePathPrefix?: string;
-  cacheNamespace: ReturnType<typeof resolvePublicImageCacheNamespace>;
-}): InFlightBatchLoader<PublicSubmissionImage[]> {
-  let loaders = imageLoadersByDb.get(payload.db);
-  if (!loaders) {
-    loaders = new Map();
-    imageLoadersByDb.set(payload.db, loaders);
-  }
-
-  const loaderKey = JSON.stringify([
-    payload.cacheNamespace,
-    payload.assetBaseUrl,
-    payload.pathPrefix ?? null,
-    payload.excludePathPrefix ?? null
-  ]);
-  let loader = loaders.get(loaderKey);
-  if (!loader) {
-    loader = new InFlightBatchLoader<PublicSubmissionImage[]>();
-    loaders.set(loaderKey, loader);
-  }
-  return loader;
-}
-
 function groupPublicImagesByMarker(
   markerIds: string[],
   images: PublicSubmissionImage[]
@@ -111,7 +79,7 @@ export async function listCachedPublicImagesByMarker(
   }
 
   if (missingIds.length > 0) {
-    const loader = getPublicImageLoader(payload);
+    const loader = new InFlightBatchLoader<PublicSubmissionImage[]>();
     const loaded = await Promise.all(missingIds.map(async (markerId) => ({
       markerId,
       images: await loader.load(markerId, async (markerIds) => {

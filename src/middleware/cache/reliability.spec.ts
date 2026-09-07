@@ -18,6 +18,58 @@ beforeEach(() => mocks.fetch.mockReset());
 afterEach(() => vi.restoreAllMocks());
 
 describe("bounded public reads", () => {
+  it.each(["images", "comments"])("releases unused %s entries before other marker bodies finish", async (kind) => {
+    let finishSlow!: () => void;
+    const firstItems = [
+      { id: "returned", markerId: "first", replies: [] },
+      { id: "unused", markerId: "first", replies: [] }
+    ];
+    const select = vi.spyOn(firstItems, "slice");
+    mocks.fetch.mockImplementation(async (request: Request) => ({
+      ok: true,
+      json: () => new URL(request.url).searchParams.get("markerId") === "first"
+        ? Promise.resolve({ items: firstItems })
+        : new Promise((resolve) => { finishSlow = () => resolve({ items: [] }); })
+    }));
+    const payload = {
+      markerIds: ["first", "slow"], limit: 1, replyLimit: 1,
+      cacheNamespace: "prod" as const, assetBaseUrl: "https://assets.example"
+    };
+    const pending = kind === "images"
+      ? fetchPublicImagesFromWorkersCache(payload)
+      : fetchPublicCommentsFromWorkersCache(payload);
+    await vi.waitFor(() => expect(finishSlow).toBeTypeOf("function"));
+    try {
+      expect(select).toHaveBeenCalledWith(0, 1);
+    } finally {
+      finishSlow();
+      await pending;
+    }
+    expect(await (await pending).json()).toEqual({ items: [firstItems[0]] });
+  });
+
+  it("records bounded failure diagnostics including response-body failures", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetch.mockImplementation(async (request: Request) => {
+      if (new URL(request.url).searchParams.get("markerId") === "success") {
+        return Response.json({ items: [] });
+      }
+      return { ok: true, status: 200, json: async () => { throw new Error("Network connection lost."); } };
+    });
+    const response = await fetchPublicImagesFromWorkersCache({
+      markerIds: ["success", "failed-1", "failed-2", "failed-3", "failed-4"],
+      limit: 6, cacheNamespace: "prod", assetBaseUrl: "https://assets.example"
+    });
+    expect(response.headers.get("x-oem-failed-marker-count")).toBe("4");
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith("[public-read] partial marker response", expect.objectContaining({
+      kind: "image", failedMarkerCount: 4, totalMarkerCount: 5,
+      failures: Array.from({ length: 3 }, () => expect.objectContaining({
+        stage: "body", upstreamStatus: 200, message: "Network connection lost."
+      }))
+    }));
+  });
+
   it("limits fanout until response bodies are consumed and preserves marker order", async () => {
     const releases: Array<() => void> = [];
     let active = 0;

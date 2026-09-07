@@ -39,6 +39,7 @@ import { publishNotificationsCreated } from "../services/notify/live";
 import type { NotificationRecord } from "../repositories/notifications";
 import { getImageCoverage } from "../services/moderation/imageCoverage";
 import { getOrphanImages } from "../services/moderation/orphanImages";
+import { sendModerationWarning } from "../services/moderation/warnings";
 import type { AppEnv } from "../types/app";
 
 const updateSchema = z.object({
@@ -72,6 +73,10 @@ const duplicateMarkerImagesQuerySchema = z.object({
 const runSchema = z.object({
   ids: z.array(z.string().min(1).max(64)).min(1).max(500).optional(),
   limit: z.coerce.number().int().min(1).max(20).optional()
+});
+
+const warningSchema = z.object({
+  publicUid: z.string().trim().min(1).max(32)
 });
 
 const STATUS_TRANSITIONS: Record<SubmissionStatus, SubmissionStatus[]> = {
@@ -248,6 +253,25 @@ export function createModerationRoutes() {
       );
     }
     await next();
+  });
+
+  app.post("/warnings", requireAuth, requireRole(["a"]), rateLimit("auth"), async (c) => {
+    const parsed = warningSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      throw new ApiError(422, "VALIDATION_ERROR", "Invalid moderation warning payload.", parsed.error.flatten());
+    }
+
+    const result = await sendModerationWarning(c.env, parsed.data);
+    if (!result) {
+      throw new ApiError(404, "USER_NOT_FOUND", "No user was found for the supplied public UID.");
+    }
+
+    return c.json({
+      ok: true,
+      publicUid: result.publicUid,
+      provider: result.delivery.provider,
+      messageId: result.delivery.id ?? null
+    });
   });
 
   app.get("/pending", requireAuth, requireRole(["p", "a"]), rateLimit("auth"), async (c) => {

@@ -230,6 +230,20 @@ export async function getUserByUid(db: D1Database, uid: string): Promise<UserRec
   return row ? mapUser(row) : null;
 }
 
+export async function getUserByPublicUid(db: D1Database, publicUid: string): Promise<UserRecord | null> {
+  const match = /^(\d+)([A-Za-z0-9]{2})$/.exec(publicUid.trim());
+  if (!match) return null;
+
+  const uidNumber = Number(match[1]);
+  if (!Number.isSafeInteger(uidNumber) || uidNumber <= 0) return null;
+
+  const row = await db
+    .prepare("SELECT * FROM users WHERE uid_number = ?1 AND UPPER(uid_suffix) = ?2 LIMIT 1")
+    .bind(uidNumber, match[2]!.toUpperCase())
+    .first<Record<string, unknown>>();
+  return row ? mapUser(row) : null;
+}
+
 function normalizeNickname(raw: string | undefined, uid: string, email?: string): string[] {
   const source = (raw ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 26);
   const emailLocalPart = (email?.split("@")[0] ?? "")

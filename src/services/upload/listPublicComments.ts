@@ -24,29 +24,6 @@ import { commentsQuerySchema } from "./schemas";
 import { resolveImageScope } from "./scope";
 import { applyCommentViewerReactions } from "./viewerOverlay";
 
-const commentLoadersByDb = new WeakMap<
-  D1Database,
-  Map<string, InFlightBatchLoader<PublicSubmissionComment[]>>
->();
-
-function getPublicCommentLoader(payload: {
-  db: D1Database;
-  cacheNamespace: ReturnType<typeof resolvePublicCommentCacheNamespace>;
-}): InFlightBatchLoader<PublicSubmissionComment[]> {
-  let loaders = commentLoadersByDb.get(payload.db);
-  if (!loaders) {
-    loaders = new Map();
-    commentLoadersByDb.set(payload.db, loaders);
-  }
-
-  let loader = loaders.get(payload.cacheNamespace);
-  if (!loader) {
-    loader = new InFlightBatchLoader<PublicSubmissionComment[]>();
-    loaders.set(payload.cacheNamespace, loader);
-  }
-  return loader;
-}
-
 function groupPublicCommentsByMarker(
   markerIds: string[],
   comments: PublicSubmissionComment[]
@@ -160,7 +137,7 @@ export async function listCachedPublicCommentsByMarker(
   }
 
   if (missingIds.length > 0) {
-    const loader = getPublicCommentLoader(payload);
+    const loader = new InFlightBatchLoader<PublicSubmissionComment[]>();
     const loaded = await Promise.all(missingIds.map(async (markerId) => ({
       markerId,
       comments: await loader.load(markerId, async (markerIds) => {

@@ -80,6 +80,7 @@ export interface EmailPayload {
   subject: string;
   text: string;
   html?: string;
+  from?: string;
 }
 
 export interface SendEmailResult {
@@ -122,7 +123,7 @@ class ResendEmailProvider implements EmailProvider {
   async send(payload: EmailPayload): Promise<SendEmailResult> {
     try {
       const result = await this.client.emails.send({
-        from: getFromAddress(),
+        from: getFromAddress(payload.from),
         to: payload.to,
         subject: payload.subject,
         text: payload.text,
@@ -146,7 +147,7 @@ class CloudflareEmailProvider implements EmailProvider {
     try {
       const result = await this.binding.send({
         to: payload.to,
-        from: getFromAddress(),
+        from: getFromAddress(payload.from),
         subject: payload.subject,
         text: payload.text,
         html: payload.html,
@@ -165,7 +166,8 @@ class CloudflareEmailProvider implements EmailProvider {
   }
 }
 
-function getFromAddress(): string {
+function getFromAddress(override?: string): string {
+  if (override) return normalizeFromAddress(override);
   if (fromAddress.includes('<') || !fromName) return fromAddress;
   return `${fromName} <${fromAddress}>`;
 }

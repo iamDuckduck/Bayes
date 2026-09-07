@@ -69,6 +69,22 @@ describe('email provider fallback', () => {
     }));
   });
 
+  it('supports a per-message sender override', async () => {
+    resendSend.mockResolvedValue({ data: { id: 'resend-message-id' }, error: null });
+    const env = makeEnv();
+    initResend(env);
+
+    await expect(sendEmail({
+      to: 'user@example.com',
+      from: 'moderation@opendfieldmap.org',
+      subject: 'Warning',
+      text: 'Text',
+    })).resolves.toEqual({ provider: 'resend', id: 'resend-message-id' });
+    expect(resendSend).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'moderation@opendfieldmap.org',
+    }));
+  });
+
   it('uses Cloudflare after the local daily quota is exhausted', async () => {
     const cloudflareSend = vi.fn().mockResolvedValue({ messageId: 'cf-message-id' });
     redisGet.mockResolvedValue('1');

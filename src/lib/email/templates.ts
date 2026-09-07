@@ -21,6 +21,24 @@ interface LinkTemplate {
   ignore: string;
 }
 
+interface ModerationWarningTemplate {
+  subject: string;
+  title: string;
+  accountLine: string;
+  detectedBehavior: string;
+  policyIntro: string;
+  communityGuidelinesLabel: string;
+  communityGuidelinesUrl: string;
+  ugcStatementLabel: string;
+  ugcStatementUrl: string;
+  contextParagraph: string;
+  warningParagraph: string;
+  appealParagraph: string;
+  regards: string;
+  signature: string;
+  moderationEmail: string;
+}
+
 interface FooterLinks {
   siteText: string;
   siteUrl: string;
@@ -83,16 +101,18 @@ function renderOemLayout(input: {
   title: string;
   intro: string;
   contentHtml: string;
-  expiresText: string;
-  ignoreText: string;
+  expiresText?: string;
+  ignoreText?: string;
+  footerPrimaryText?: string;
+  footerSecondaryText?: string;
   brand: string;
   links: FooterLinks;
   slogan: string;
 }): string {
   const safeTitle = escapeHtml(input.title);
   const safeIntro = escapeHtml(input.intro);
-  const safeExpires = escapeHtml(input.expiresText);
-  const safeIgnore = escapeHtml(input.ignoreText);
+  const safeExpires = escapeHtml(input.footerPrimaryText ?? input.expiresText ?? "");
+  const safeIgnore = escapeHtml(input.footerSecondaryText ?? input.ignoreText ?? "");
   const safeBrand = escapeHtml(input.brand);
   const safeSlogan = escapeHtml(input.slogan);
   const safeSiteText = escapeHtml(input.links.siteText);
@@ -120,10 +140,10 @@ function renderOemLayout(input: {
                   />
                 </div>
                 <h1 style="margin:18px 0 10px;font-size:32px;line-height:1.2;font-weight:800;text-align:center;">${safeTitle}</h1>
-                <p style="margin:0 0 24px;font-size:18px;line-height:1.7;text-align:center;">${safeIntro}</p>
+                ${safeIntro ? `<p style="margin:0 0 24px;font-size:18px;line-height:1.7;text-align:center;">${safeIntro}</p>` : ""}
                 ${input.contentHtml}
-                <p style="margin:28px 0 8px;color:${TEXT_PRIMARY};font-size:15px;line-height:1.75;text-align:center;font-weight:600;">${safeExpires}</p>
-                <p style="margin:0 0 0;color:${TEXT_MUTED};font-size:15px;line-height:1.75;text-align:center;">${safeIgnore}</p>
+                ${safeExpires ? `<p style="margin:28px 0 8px;color:${TEXT_PRIMARY};font-size:15px;line-height:1.75;text-align:center;font-weight:600;">${safeExpires}</p>` : ""}
+                ${safeIgnore ? `<p style="margin:0 0 0;color:${TEXT_MUTED};font-size:15px;line-height:1.75;text-align:center;">${safeIgnore}</p>` : ""}
                 <div style="text-align:center;margin-top:50px;">
                   <div style="font-size:24px;font-weight:800;line-height:1.15;color:#111;">${safeBrand}</div>
                   <div style="margin-top:6px;font-size:20px;font-weight:700;line-height:1.3;">
@@ -341,4 +361,86 @@ export function createResetPasswordMagicLinkTemplate(input: {
   const localeObj = getLocaleTemplates(input.locale);
   const template = localeObj.passwordResetMagicLink;
   return createMagicLinkTemplate(localeObj, template, input.url);
+}
+
+const MODERATION_WARNING_TEMPLATE: ModerationWarningTemplate = {
+  subject: "[OEM Moderation] Warning: Repeated Link-Only Posts",
+  title: "Moderation Warning",
+  accountLine: "We are contacting you regarding activity associated with your Open Endfield Map account",
+  detectedBehavior: "We detected repeated or bulk posting of context-free external links in the discussion area. This is not allowed regardless of Karma level.",
+  policyIntro: "Applicable policies:",
+  communityGuidelinesLabel: "Community Guidelines",
+  communityGuidelinesUrl: "https://blog.opendfieldmap.org/docs/community-guidelines",
+  ugcStatementLabel: "UGC Content Statement",
+  ugcStatementUrl: "https://blog.opendfieldmap.org/docs/ugc",
+  contextParagraph: "Please stop posting link-only comments. Relevant links must include brief context about their purpose or location.",
+  warningParagraph: "This is a moderation warning. Further violations may result in account suspension.",
+  appealParagraph: "If this notice is incorrect, reply to this email to appeal.",
+  regards: "Regards,",
+  signature: "OEM Moderation",
+  moderationEmail: "moderation@opendfieldmap.org",
+};
+
+export function createModerationWarningEmailTemplate(input: {
+  displayName: string;
+  publicUid: string;
+}): RenderedEmail {
+  const safeDisplayName = escapeHtml(input.displayName);
+  const safePublicUid = escapeHtml(input.publicUid);
+  const safeCommunityGuidelinesUrl = escapeHtml(MODERATION_WARNING_TEMPLATE.communityGuidelinesUrl);
+  const safeUgcStatementUrl = escapeHtml(MODERATION_WARNING_TEMPLATE.ugcStatementUrl);
+  const contentHtml = `
+    <div style="margin:8px 0 0;background:${CODE_CARD_BG};border:1px solid #E3E3DA;border-radius:26px;padding:26px 24px;text-align:left;">
+      <p style="margin:0 0 18px;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.accountLine)} <strong>${safePublicUid}</strong>.</p>
+      <p style="margin:0 0 18px;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.detectedBehavior)}</p>
+      <p style="margin:0 0 8px;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.policyIntro)}</p>
+      <ul style="margin:0 0 18px;padding-left:24px;font-size:16px;line-height:1.75;">
+        <li><a href="${safeCommunityGuidelinesUrl}" style="color:#111;text-decoration:underline;">${escapeHtml(MODERATION_WARNING_TEMPLATE.communityGuidelinesLabel)}</a></li>
+        <li><a href="${safeUgcStatementUrl}" style="color:#111;text-decoration:underline;">${escapeHtml(MODERATION_WARNING_TEMPLATE.ugcStatementLabel)}</a></li>
+      </ul>
+      <p style="margin:0 0 18px;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.contextParagraph)}</p>
+      <p style="margin:0 0 18px;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.warningParagraph)}</p>
+      <p style="margin:0 0 18px;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.appealParagraph)}</p>
+      <p style="margin:0;font-size:16px;line-height:1.75;">${escapeHtml(MODERATION_WARNING_TEMPLATE.regards)}<br><br><strong>${escapeHtml(MODERATION_WARNING_TEMPLATE.signature)}</strong><br>${escapeHtml(MODERATION_WARNING_TEMPLATE.moderationEmail)}</p>
+    </div>
+  `;
+
+  return {
+    subject: MODERATION_WARNING_TEMPLATE.subject,
+    text: [
+      `Hello ${input.displayName},`,
+      "",
+      `${MODERATION_WARNING_TEMPLATE.accountLine} ${input.publicUid}.`,
+      "",
+      MODERATION_WARNING_TEMPLATE.detectedBehavior,
+      "",
+      MODERATION_WARNING_TEMPLATE.policyIntro,
+      `- ${MODERATION_WARNING_TEMPLATE.communityGuidelinesLabel}: ${MODERATION_WARNING_TEMPLATE.communityGuidelinesUrl}`,
+      `- ${MODERATION_WARNING_TEMPLATE.ugcStatementLabel}: ${MODERATION_WARNING_TEMPLATE.ugcStatementUrl}`,
+      "",
+      MODERATION_WARNING_TEMPLATE.contextParagraph,
+      "",
+      MODERATION_WARNING_TEMPLATE.warningParagraph,
+      "",
+      MODERATION_WARNING_TEMPLATE.appealParagraph,
+      "",
+      MODERATION_WARNING_TEMPLATE.regards,
+      "",
+      MODERATION_WARNING_TEMPLATE.signature,
+      MODERATION_WARNING_TEMPLATE.moderationEmail,
+    ].join("\n"),
+    html: renderOemLayout({
+      title: MODERATION_WARNING_TEMPLATE.title,
+      intro: `Hello ${input.displayName},`,
+      contentHtml,
+      brand: "Open Endfield Map",
+      links: {
+        siteText: "opendfieldmap.org",
+        siteUrl: "https://opendfieldmap.org",
+        blogText: "Blog",
+        blogUrl: "https://blog.opendfieldmap.org",
+      },
+      slogan: "Omnipresent, Efficient, Meticulous",
+    }),
+  };
 }

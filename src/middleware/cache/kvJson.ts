@@ -5,8 +5,6 @@ type KvJsonReadOptions = {
   cacheTtl?: number;
 };
 
-const inFlightReadsByNamespace = new WeakMap<KVNamespace, Map<string, Promise<unknown | null>>>();
-
 export async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)]
@@ -21,46 +19,24 @@ export async function getJsonFromKv<T>(
 ): Promise<T | null> {
   if (!kv) return null;
 
-  let inFlightReads = inFlightReadsByNamespace.get(kv);
-  if (!inFlightReads) {
-    inFlightReads = new Map();
-    inFlightReadsByNamespace.set(kv, inFlightReads);
-  }
-
   const cacheTtl = options?.cacheTtl === undefined
     ? undefined
     : Math.max(options.cacheTtl, DEFAULT_KV_READ_CACHE_TTL_SECONDS);
-  const inFlightKey = `${cacheTtl ?? "default"}:${key}`;
-  const existing = inFlightReads.get(inFlightKey);
-  if (existing) {
-    return existing as Promise<T | null>;
+  let raw: string | null;
+  try {
+    raw = cacheTtl === undefined
+      ? await kv.get(key)
+      : await kv.get(key, { type: "text", cacheTtl });
+  } catch {
+    return null;
   }
+  if (!raw) return null;
 
-  const request = (async (): Promise<unknown | null> => {
-    let raw: string | null;
-    try {
-      raw = cacheTtl === undefined
-        ? await kv.get(key)
-        : await kv.get(key, { type: "text", cacheTtl });
-    } catch {
-      return null;
-    }
-    if (!raw) return null;
-
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      return null;
-    }
-  })();
-  inFlightReads.set(inFlightKey, request);
-  const cleanup = (): void => {
-    if (inFlightReads.get(inFlightKey) === request) {
-      inFlightReads.delete(inFlightKey);
-    }
-  };
-  void request.then(cleanup, cleanup);
-  return request as Promise<T | null>;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
 
 export async function putJsonToKv(
