@@ -22,6 +22,7 @@ import {
 } from "../services/upload/mutateImage";
 import { handleListMyComments, handleListPublicComments } from "../services/upload/listPublicComments";
 import { handleListMyImages, handleListPublicImages } from "../services/upload/listPublicImages";
+import { handleGetPublicImage } from "../services/upload/getPublicImage";
 import { handleServePrivateImageFile, handleServePublicImageFile } from "../services/upload/serveImageFile";
 import { commentTranslationSchema } from "../services/upload/schemas";
 import { handleSubmitComment } from "../services/upload/submitComment";
@@ -90,6 +91,8 @@ export function createUploadRoutes() {
 
   app.get("/public-file/*", rateLimit("public"), handleServePublicImageFile);
   app.get("/images/mine", requireActiveUser, rateLimit("auth"), handleListMyImages);
+  // Keep after /images/mine so "mine" is not treated as an image ID.
+  app.get("/images/:id", rateLimit("public"), handleGetPublicImage);
   app.get("/file/*", requireActiveUser, rateLimit("auth"), handleServePrivateImageFile);
   app.post("/images/:id/upvote", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleImageUpvote);
   app.post("/images/:id/unvote", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleImageUnvote);
