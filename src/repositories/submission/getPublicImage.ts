@@ -6,20 +6,22 @@ export async function getPublicImageById(
   db: D1Database,
   payload: {
     id: string;
+    markerId: string;
     assetBaseUrl: string;
     pathPrefix?: string;
     excludePathPrefix?: string;
     viewerUserId?: string;
   }
 ): Promise<PublicSubmissionImage | null> {
-  const scope = buildImageScopeFilters(payload, 1);
+  const scope = buildImageScopeFilters(payload, 2);
   const filters = [
     "s.id = ?1",
+    "s.poi_id = ?2",
     "s.kind = 'image'",
     "s.status IN ('active', 'flagged', 'remove_request')",
     ...scope.clauses.map((clause) => `s.${clause}`)
   ];
-  const viewerBinding = scope.bindings.length + 2;
+  const viewerBinding = scope.bindings.length + 3;
   const viewerSelect = payload.viewerUserId
     ? `,
        EXISTS(SELECT 1 FROM ugc_submission_upvotes
@@ -41,6 +43,7 @@ export async function getPublicImageById(
      WHERE ${filters.join(" AND ")}`
   ).bind(
     payload.id,
+    payload.markerId,
     ...scope.bindings,
     ...(payload.viewerUserId ? [payload.viewerUserId] : [])
   ).first<Record<string, unknown>>();
