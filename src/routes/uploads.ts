@@ -1,6 +1,6 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { ApiError } from "../lib/errors";
-import { requireAuth, resolveContextAuthUser } from "../middleware/auth";
+import { resolveContextAuthUser } from "../middleware/auth";
 import { rateLimit } from "../middleware/rate-limit";
 import { translateVisibleComments } from "../services/upload/commentTranslation";
 import {
@@ -33,67 +33,38 @@ function isUploadsLocked(flag: string | undefined): boolean {
   return !["0", "false", "off", "no"].includes(normalized);
 }
 
-function isReadOrPublicTranslation(method: string, path: string): boolean {
-  const isImageRead = method === "GET" && (
-    path.endsWith("/uploads/v1/images") ||
-    path.endsWith("/uploads/v1/images/mine") ||
-    path.endsWith("/uploads/v1/comments") ||
-    path.endsWith("/uploads/v1/comments/mine") ||
-    path.includes("/uploads/v1/public-file/") ||
-    path.includes("/uploads/v1/file/") ||
-    path.includes("/public-file/") ||
-    path.includes("/file/")
-  );
-  const isPublicTranslation = method === "POST" && path.endsWith("/uploads/v1/comments/translations");
-  return isImageRead || isPublicTranslation;
+async function assertActiveUser(c: Parameters<MiddlewareHandler<AppEnv>>[0]): Promise<void> {
+  const user = await resolveContextAuthUser(c);
+  if (user.role === "s") {
+    throw new ApiError(
+      403,
+      "ACCESS_DENIED",
+      "Suspended users cannot access upload endpoints."
+    );
+  }
 }
 
-function isPublicReadOrTranslation(method: string, path: string): boolean {
-  return (
-    method === "GET" && (
-      path.endsWith("/uploads/v1/images") ||
-      path.endsWith("/uploads/v1/comments") ||
-      path.includes("/uploads/v1/public-file/") ||
-      path.includes("/public-file/")
-    )
-  ) || (
-    method === "POST" && path.endsWith("/uploads/v1/comments/translations")
-  );
-}
+const requireActiveUser: MiddlewareHandler<AppEnv> = async (c, next) => {
+  await assertActiveUser(c);
+  await next();
+};
+
+const requireUploadsEnabled: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (isUploadsLocked(c.env.LOCK_UPLOAD_ENDPOINTS)) {
+    throw new ApiError(
+      503,
+      "UPLOADS_TEMPORARILY_DISABLED",
+      "Upload endpoints are temporarily disabled during stabilization."
+    );
+  }
+  await next();
+};
 
 export function createUploadRoutes() {
   const app = new Hono<AppEnv>();
 
-  app.use("*", async (c, next) => {
-    const isPublicRequest = isPublicReadOrTranslation(c.req.method, c.req.path);
-    const hasAuthCredentials = Boolean(
-      c.req.header("authorization")?.trim() ||
-      c.req.header("cookie")?.trim() ||
-      c.req.query("access_token")?.trim()
-    );
-    if (hasAuthCredentials && !isPublicRequest) {
-      const user = await resolveContextAuthUser(c);
-      if (user.role === "s") {
-        throw new ApiError(
-          403,
-          "ACCESS_DENIED",
-          "Suspended users cannot access upload endpoints."
-        );
-      }
-    }
-
-    if (!isReadOrPublicTranslation(c.req.method, c.req.path) && isUploadsLocked(c.env.LOCK_UPLOAD_ENDPOINTS)) {
-      throw new ApiError(
-        503,
-        "UPLOADS_TEMPORARILY_DISABLED",
-        "Upload endpoints are temporarily disabled during stabilization."
-      );
-    }
-    await next();
-  });
-
-  app.post("/images", requireAuth, rateLimit("upload"), handleSubmitImage);
-  app.post("/comments", requireAuth, rateLimit("upload"), handleSubmitComment);
+  app.post("/images", requireActiveUser, requireUploadsEnabled, rateLimit("upload"), handleSubmitImage);
+  app.post("/comments", requireActiveUser, requireUploadsEnabled, rateLimit("upload"), handleSubmitComment);
   app.post("/comments/translations", rateLimit("public"), async (c) => {
     const parsed = commentTranslationSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
@@ -101,39 +72,32 @@ export function createUploadRoutes() {
     }
 
     if (parsed.data.cachedOnly !== true) {
-      const user = await resolveContextAuthUser(c);
-      if (user.role === "s") {
-        throw new ApiError(
-          403,
-          "ACCESS_DENIED",
-          "Suspended users cannot request live translations."
-        );
-      }
+      await assertActiveUser(c);
     }
 
     return c.json(await translateVisibleComments(c.env, parsed.data));
   });
 
-  app.get("/comments/mine", requireAuth, rateLimit("auth"), handleListMyComments);
+  app.get("/comments/mine", requireActiveUser, rateLimit("auth"), handleListMyComments);
   app.get("/comments", rateLimit("public"), handleListPublicComments);
-  app.post("/comments/:id/upvote", requireAuth, rateLimit("auth"), (c) => handleCommentVote(c, 1));
-  app.post("/comments/:id/downvote", requireAuth, rateLimit("auth"), (c) => handleCommentVote(c, -1));
-  app.post("/comments/:id/flag", requireAuth, rateLimit("auth"), handleFlagComment);
-  app.post("/comments/:id/unflag", requireAuth, rateLimit("auth"), handleUnflagComment);
-  app.post("/comments/:id/edit", requireAuth, rateLimit("upload"), handleEditComment);
-  app.post("/comments/:id/remove-request", requireAuth, rateLimit("auth"), handleCommentRemoveRequest);
-  app.post("/comments/:id/recall", requireAuth, rateLimit("auth"), handleRecallComment);
+  app.post("/comments/:id/upvote", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), (c) => handleCommentVote(c, 1));
+  app.post("/comments/:id/downvote", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), (c) => handleCommentVote(c, -1));
+  app.post("/comments/:id/flag", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleFlagComment);
+  app.post("/comments/:id/unflag", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleUnflagComment);
+  app.post("/comments/:id/edit", requireActiveUser, requireUploadsEnabled, rateLimit("upload"), handleEditComment);
+  app.post("/comments/:id/remove-request", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleCommentRemoveRequest);
+  app.post("/comments/:id/recall", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleRecallComment);
 
   app.get("/public-file/*", rateLimit("public"), handleServePublicImageFile);
-  app.get("/images/mine", requireAuth, rateLimit("auth"), handleListMyImages);
-  app.get("/file/*", requireAuth, rateLimit("auth"), handleServePrivateImageFile);
-  app.post("/images/:id/upvote", requireAuth, rateLimit("auth"), handleImageUpvote);
-  app.post("/images/:id/unvote", requireAuth, rateLimit("auth"), handleImageUnvote);
-  app.post("/images/:id/flag", requireAuth, rateLimit("auth"), handleFlagImage);
-  app.post("/images/:id/unflag", requireAuth, rateLimit("auth"), handleUnflagImage);
-  app.post("/images/:id/remove-request", requireAuth, rateLimit("auth"), handleImageRemoveRequest);
-  app.post("/images/:id/unrecall", requireAuth, rateLimit("auth"), handleUnrecallImage);
-  app.post("/images/:id/recall", requireAuth, rateLimit("auth"), handleRecallImage);
+  app.get("/images/mine", requireActiveUser, rateLimit("auth"), handleListMyImages);
+  app.get("/file/*", requireActiveUser, rateLimit("auth"), handleServePrivateImageFile);
+  app.post("/images/:id/upvote", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleImageUpvote);
+  app.post("/images/:id/unvote", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleImageUnvote);
+  app.post("/images/:id/flag", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleFlagImage);
+  app.post("/images/:id/unflag", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleUnflagImage);
+  app.post("/images/:id/remove-request", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleImageRemoveRequest);
+  app.post("/images/:id/unrecall", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleUnrecallImage);
+  app.post("/images/:id/recall", requireActiveUser, requireUploadsEnabled, rateLimit("auth"), handleRecallImage);
   app.get("/images", rateLimit("public"), handleListPublicImages);
 
   return app;
