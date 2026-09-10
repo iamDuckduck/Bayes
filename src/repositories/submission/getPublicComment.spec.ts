@@ -170,6 +170,103 @@ describe("getPublicCommentContextById", () => {
     expect(JSON.stringify(context)).not.toContain("Private removed content");
   });
 
+  it("returns public descendants in parent-before-child order", async () => {
+    insertComment({ id: "root" });
+    insertComment({ id: "target", parentId: "root", depth: 1 });
+    insertComment({
+      id: "reply-later",
+      parentId: "target",
+      depth: 2,
+      createdAt: "2026-09-10T00:02:00.000Z"
+    });
+    insertComment({
+      id: "reply-earlier",
+      parentId: "target",
+      depth: 2,
+      createdAt: "2026-09-10T00:01:00.000Z"
+    });
+    insertComment({
+      id: "nested-reply",
+      parentId: "reply-earlier",
+      depth: 3,
+      createdAt: "2026-09-10T00:00:00.000Z"
+    });
+    insertComment({ id: "root-sibling", parentId: "root", depth: 1 });
+
+    const context = await getPublicCommentContextById(db, {
+      id: "target",
+      markerId: "marker-1"
+    });
+
+    expect(context?.replies.map((reply) => reply.id)).toEqual([
+      "reply-earlier",
+      "reply-later",
+      "nested-reply"
+    ]);
+    expect(context?.replies[0]).toMatchObject({
+      parentId: "target",
+      depth: 2,
+      replyCount: 1
+    });
+    expect(context?.repliesTruncated).toBe(false);
+  });
+
+  it("omits a non-public reply while retaining its public descendants", async () => {
+    insertComment({ id: "target" });
+    insertComment({
+      id: "hidden-reply",
+      parentId: "target",
+      depth: 1,
+      status: "pending_audit",
+      content: "Private reply content"
+    });
+    insertComment({
+      id: "public-grandchild",
+      parentId: "hidden-reply",
+      depth: 2,
+      content: "Public descendant"
+    });
+
+    const context = await getPublicCommentContextById(db, {
+      id: "target",
+      markerId: "marker-1"
+    });
+
+    expect(context?.replies.map((reply) => reply.id)).toEqual(["public-grandchild"]);
+    expect(JSON.stringify(context)).not.toContain("Private reply content");
+  });
+
+  it("limits reply context to ten public descendants and reports truncation", async () => {
+    insertComment({ id: "target" });
+    for (let index = 0; index < 11; index += 1) {
+      insertComment({
+        id: `reply-${String(index).padStart(2, "0")}`,
+        parentId: "target",
+        depth: 1,
+        createdAt: `2026-09-10T00:${String(index).padStart(2, "0")}:00.000Z`
+      });
+    }
+
+    const context = await getPublicCommentContextById(db, {
+      id: "target",
+      markerId: "marker-1"
+    });
+
+    expect(context?.replies.map((reply) => reply.id)).toEqual([
+      "reply-00",
+      "reply-01",
+      "reply-02",
+      "reply-03",
+      "reply-04",
+      "reply-05",
+      "reply-06",
+      "reply-07",
+      "reply-08",
+      "reply-09"
+    ]);
+    expect(context?.repliesTruncated).toBe(true);
+  });
+
   it.each(["pending_openai", "pending_audit", "stale"])(
     "does not return a target with non-public status %s",
     async (status) => {
