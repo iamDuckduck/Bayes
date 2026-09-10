@@ -220,7 +220,7 @@ export async function sendModerationNotificationNow(env: Bindings, event: Modera
 
   const webhookUrl = resolveModerationWebhookUrl(env);
   if (!webhookUrl) {
-    return;
+    throw new Error("DISCORD_MODERATION_WEBHOOK_URL is not configured");
   }
 
   const controller = new AbortController();

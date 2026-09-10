@@ -36,12 +36,12 @@ describe("backend safety boundaries", () => {
   it("never sends moderation data to a built-in webhook", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await sendModerationNotificationNow({} as Bindings, {
+    await expect(sendModerationNotificationNow({} as Bindings, {
       type: "comment_translation_prewarm_completed",
       source: "auto_moderation",
       submission: {} as never,
       targets: []
-    });
+    })).rejects.toThrow("DISCORD_MODERATION_WEBHOOK_URL is not configured");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
