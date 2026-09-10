@@ -42,6 +42,8 @@ beforeEach(() => {
       ON ugc_submissions(parent_id, created_at, id)
       WHERE kind = 'comment'
         AND status IN ('active', 'flagged', 'remove_request');
+    CREATE INDEX idx_ugc_comment_threads
+      ON ugc_submissions(kind, poi_id, parent_id, status, created_at);
 
     CREATE TABLE ugc_submission_votes (
       submission_id TEXT NOT NULL,
@@ -209,6 +211,9 @@ describe("getPublicCommentContextById", () => {
       replyCount: 1
     });
     expect(context?.repliesTruncated).toBe(false);
+
+    const replyQuery = database.queries[1]!;
+    expect(database.explain(replyQuery)).toContain("idx_ugc_comment_threads");
   });
 
   it("omits a non-public reply while retaining its public descendants", async () => {
@@ -234,6 +239,41 @@ describe("getPublicCommentContextById", () => {
 
     expect(context?.replies.map((reply) => reply.id)).toEqual(["public-grandchild"]);
     expect(JSON.stringify(context)).not.toContain("Private reply content");
+  });
+
+  it("stops ancestor and descendant traversal when parent links form a cycle", async () => {
+    insertComment({ id: "target", parentId: "cycle-parent", depth: 2 });
+    insertComment({ id: "cycle-parent", parentId: "target", depth: 1 });
+
+    const context = await getPublicCommentContextById(db, {
+      id: "target",
+      markerId: "marker-1"
+    });
+
+    expect(context?.path.map((comment) => comment.id)).toEqual(["cycle-parent", "target"]);
+    expect(context?.replies.map((comment) => comment.id)).toEqual(["cycle-parent"]);
+  });
+
+  it("bounds hidden descendant traversal and reports conservative truncation", async () => {
+    insertComment({ id: "target" });
+    for (let index = 0; index < 300; index += 1) {
+      insertComment({
+        id: `hidden-${String(index).padStart(3, "0")}`,
+        parentId: "target",
+        depth: 1,
+        status: "pending_audit",
+        content: `Private ${index}`
+      });
+    }
+
+    const context = await getPublicCommentContextById(db, {
+      id: "target",
+      markerId: "marker-1"
+    });
+
+    expect(context?.replies).toEqual([]);
+    expect(context?.repliesTruncated).toBe(true);
+    expect(JSON.stringify(context)).not.toContain("Private");
   });
 
   it("limits reply context to ten public descendants and reports truncation", async () => {
