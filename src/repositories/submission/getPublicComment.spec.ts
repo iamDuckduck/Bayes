@@ -276,6 +276,40 @@ describe("getPublicCommentContextById", () => {
     expect(JSON.stringify(context)).not.toContain("Private");
   });
 
+  it.each([
+    { ending: "public child", truncated: true },
+    { ending: "hidden child", truncated: true },
+    { ending: "leaf", truncated: false },
+    { ending: "other marker", truncated: false },
+    { ending: "image", truncated: false },
+    { ending: "cycle", truncated: false }
+  ])("reports depth-limit truncation correctly for a $ending", async ({ ending, truncated }) => {
+    insertComment({ id: "target", parentId: ending === "cycle" ? "hidden-64" : null });
+    for (let depth = 1; depth <= 64; depth += 1) {
+      insertComment({
+        id: `hidden-${depth}`,
+        parentId: depth === 1 ? "target" : `hidden-${depth - 1}`,
+        depth,
+        status: "pending_audit"
+      });
+    }
+    if (ending !== "leaf" && ending !== "cycle") {
+      insertComment({
+        id: "beyond-limit",
+        parentId: "hidden-64",
+        depth: 65,
+        status: ending === "hidden child" ? "pending_audit" : "active",
+        markerId: ending === "other marker" ? "marker-2" : "marker-1",
+        kind: ending === "image" ? "image" : "comment"
+      });
+    }
+
+    const context = await getPublicCommentContextById(db, { id: "target", markerId: "marker-1" });
+
+    expect(context?.replies).toEqual([]);
+    expect(context?.repliesTruncated).toBe(truncated);
+  });
+
   it("limits reply context to ten public descendants and reports truncation", async () => {
     insertComment({ id: "target" });
     for (let index = 0; index < 11; index += 1) {

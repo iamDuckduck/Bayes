@@ -99,7 +99,21 @@ export async function getPublicCommentContextById(
          LIMIT ?4
        ),
        traversal_meta AS (
-         SELECT COUNT(*) AS traversed_count
+         SELECT COUNT(*) AS traversed_count,
+           EXISTS (
+             SELECT 1 FROM reply_context boundary
+             WHERE boundary.relative_depth = ?3
+               AND EXISTS (
+                 SELECT 1 FROM ugc_submissions child
+                 WHERE child.parent_id = boundary.id
+                   AND child.poi_id = ?2
+                   AND child.kind = 'comment'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM json_each(boundary.visited_ids) visited
+                     WHERE visited.value = child.id
+                   )
+               )
+           ) AS depth_truncated
          FROM reply_context
        ),
        selected_replies AS MATERIALIZED (
@@ -113,6 +127,7 @@ export async function getPublicCommentContextById(
        SELECT
          reply.*,
          meta.traversed_count,
+         meta.depth_truncated,
          COALESCE((
            SELECT SUM(value)
            FROM ugc_submission_votes
@@ -145,6 +160,8 @@ export async function getPublicCommentContextById(
     .all<Record<string, unknown>>();
 
   const traversedCount = Number(replyResult.results?.[0]?.traversed_count ?? 0);
+  // Hidden children also count: their public descendants were not explored.
+  const depthTruncated = Number(replyResult.results?.[0]?.depth_truncated ?? 0) === 1;
   const replyCandidates = (replyResult.results ?? [])
     .filter((row) => row.id !== null && row.id !== undefined)
     .map((row) => publicCommentFromRow(row));
@@ -154,6 +171,6 @@ export async function getPublicCommentContextById(
     path,
     replies: replyCandidates.slice(0, REPLY_CONTEXT_LIMIT),
     repliesTruncated:
-      traversalExhausted || replyCandidates.length > REPLY_CONTEXT_LIMIT
+      traversalExhausted || depthTruncated || replyCandidates.length > REPLY_CONTEXT_LIMIT
   };
 }
